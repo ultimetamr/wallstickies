@@ -1,93 +1,95 @@
-# WallStickies
+# 墙面永久空间便签（Wall Stickies）
 
+基于 PICO Spatial SDK 开发的空间提醒工具。用户可将文字便签和待办清单创建在真实墙面或桌面位置；应用重进后通过 Persistent Spatial Anchor 恢复到对应物理位置，实现“进屋即看提醒”的空间记忆体验。
 
+包名：`com.spatialapps.wallstickies`
 
-## Getting started
+## 当前能力
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+- 左手柄射线命中已识别墙面/桌面后创建便签，避免在空气中创建。
+- 便签支持标题、正文、待办清单、勾选状态、删除、纯色/磨砂样式和预设颜色。
+- 每张便签拥有独立 PICO Persistent Spatial Anchor UUID，并通过 Room 本地持久化保存内容与锚点关联。
+- 应用启动时加载当前应用全部空间锚点，按 UUID 与 Room 记录匹配恢复。
+- 订阅锚点 `LOADED` / `UPDATED` 事件，支持延迟定位与空间坐标更新。
+- 编辑器与短提示面板在头显前方显示；编辑或后台状态下禁用锚点选择，防止误触发新建。
+- 提供 `WallStickiesRestore`、`WallStickiesAnchor`、`WallStickiesRender`、`WallStickiesInput` 日志用于恢复与交互排障。
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## 技术方案
 
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
+```text
+DefaultStage（Mixed / Full Space）
+├── SpatialView
+│   ├── 便签 AttachmentPanel（世界锚定）
+│   ├── 编辑器 AttachmentPanel（跟随头显）
+│   └── 提示 AttachmentPanel（跟随头显）
+├── WorldTrackingManager（Persistent Spatial Anchor）
+└── Room（便签内容、样式、待办与 anchorUuid）
 ```
-cd existing_repo
-git remote add origin http://192.168.0.234:13001/pico-application/wallstickies.git
-git branch -M main
-git push -uf origin main
+
+> Persistent Spatial Anchor 需要在 Full Space Stage 中使用。虽然便签 UI 是平面 SpatialUI 面板，但不能仅依赖 Shared Space 的普通 WindowContainer 实现真实空间持久化。
+
+## 构建与测试
+
+环境要求：JDK 17、Android SDK、PICO Spatial SDK、Gradle Wrapper 8.13。
+
+```powershell
+.\gradlew.bat assembleDebug --no-daemon
+.\gradlew.bat testDebugUnitTest --no-daemon
 ```
 
-## Integrate with your tools
+Debug APK：
 
-- [ ] [Set up project integrations](http://192.168.0.234:13001/pico-application/wallstickies/-/settings/integrations)
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
 
-## Collaborate with your team
+## 安装到 PICO 设备
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+先查看设备：
 
-## Test and Deploy
+```powershell
+pico-cli device list --format json
+```
 
-Use the built-in continuous integration in GitLab.
+安装并启动（将设备 ID 替换为真实头显 ID）：
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+```powershell
+pico-cli app install app/build/outputs/apk/debug/app-debug.apk --device <device-id>
+pico-cli app launch com.spatialapps.wallstickies --device <device-id>
+```
 
-***
+如启动日志出现 `current full space don't allow start fullscreen`，说明另一个 Full Space 应用或系统边界设置正占用空间。请先在头显内退出该 Full Space 应用，再重新启动本应用。
 
-# Editing this README
+## 锚点恢复诊断
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+恢复链路为：
 
-## Suggestions for a good README
+```text
+Room 全部便签 → loadAnchor() 加载本应用全部锚点
+→ anchorUuid 匹配 → 更新对应 Entity Transform → AttachmentPanel 显示
+```
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+排查时依次确认：
 
-## Name
-Choose a self-explaining name for your project.
+1. `WallStickiesRestore` 中 Room 读取的便签数量；
+2. Spatial SDK 返回的 anchor 数量；
+3. 每张便签的 `restored=true/false`；
+4. `WallStickiesRender` 中的 `display=ATTACHED`。
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+PICO 模拟器可用于构建、启动和日志调试，但多锚点持久化、设备重启和位置漂移必须以真实头显验收为准。
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+## 项目文档
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- [空间固定标签应用规格基线](docs/SPATIAL_STICKY_NOTES_SPEC.md)：可复用于同类空间标签、固定提醒与空间待办项目的产品、交互、锚点恢复和验收规范。
+- [开发约束与当前验证状态](AGENTS.md)
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## 目录结构
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```text
+app/src/main/java/com/spatialapps/wallstickies/
+├── content/        # SpatialUI、空间交互与 Stage
+├── data/local/     # Room 数据库
+├── data/repository/# Room 与 World Anchor 桥接
+├── domain/         # 便签领域模型与用例
+└── platform/       # PICO 应用与启动入口
+```
