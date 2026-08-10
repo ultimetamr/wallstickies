@@ -28,6 +28,60 @@ DefaultStage（Mixed / Full Space）
 
 > Persistent Spatial Anchor 需要在 Full Space Stage 中使用。虽然便签 UI 是平面 SpatialUI 面板，但不能仅依赖 Shared Space 的普通 WindowContainer 实现真实空间持久化。
 
+## 开发环境安装（Windows）
+
+按以下顺序准备环境：Git → Node.js → Android Studio / JDK → Codex（可选）→ PICO CLI。
+
+### 1. 基础工具
+
+- 安装 [Git for Windows](https://git-scm.com/download/win)，安装时选择加入 `PATH`。
+- 安装 [Node.js LTS](https://nodejs.org/)，需要 Node.js 18+。
+- 安装 Android Studio，并通过 SDK Manager 安装项目所需的 Android SDK / Platform Tools。
+- 本项目当前已使用 **JDK 17** 验证构建；设置 `JAVA_HOME` 指向 JDK 17，并将 `%JAVA_HOME%\bin` 放入 `Path`。
+
+重新打开 PowerShell 后验证：
+
+```powershell
+git --version
+node --version
+npm --version
+java -version
+```
+
+### 2. 安装 PICO CLI 与 Codex 插件
+
+```powershell
+npm install -g @picoxr/pico-cli
+pico-cli --version
+
+# 使用 Codex 开发时执行；完成后重启 Codex 或创建新的 task。
+npm install -g @openai/codex
+pico-cli setup --tool codex --plugin pico-spatial-agentic-tools --yes
+```
+
+检查 PICO 开发环境：
+
+```powershell
+pico-cli doctor --format json
+pico-cli plugin doctor --tool codex --format json
+pico-cli mcp doctor --format json
+```
+
+首次使用模拟器前，再检查模拟器依赖：
+
+```powershell
+pico-cli emulator doctor --format json
+```
+
+### 3. 常见环境问题
+
+| 现象 | 处理 |
+| --- | --- |
+| `git`、`node`、`java` 或 `pico-cli` 找不到 | 重新打开 PowerShell，并检查对应程序是否加入 `PATH`。 |
+| Java 版本不正确 | 确认 `JAVA_HOME` 指向 JDK 17，且 `%JAVA_HOME%\bin` 排在旧 Java 路径之前。 |
+| Codex 中没有 PICO 能力 | 重启 Codex / 新建 task，再运行 `pico-cli plugin doctor --tool codex --format json`。 |
+| 模拟器启动失败 | 运行 `pico-cli emulator doctor --format json`；必要时使用 `pico-cli emulator dump-logs --out ./sim-logs` 收集日志。 |
+
 ## 构建与测试
 
 环境要求：JDK 17、Android SDK、PICO Spatial SDK、Gradle Wrapper 8.13。
