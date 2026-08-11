@@ -200,7 +200,7 @@ fun HomeStage() {
             )
             statusPosition = Vector3(
                 pose.position.x + forward.x * 0.75f,
-                pose.position.y + forward.y * 0.75f + 0.35f,
+                pose.position.y + forward.y * 0.75f,
                 pose.position.z + forward.z * 0.75f,
             )
         }
@@ -414,12 +414,10 @@ fun HomeStage() {
 @Composable
 private fun PlacementHint(message: String) {
     Column(
-        modifier = Modifier.size(440.dp, 150.dp).clip(RoundedCornerShape(24.dp))
-            .backgroundMaterial(true, Material.Regular).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.size(440.dp, 88.dp).clip(RoundedCornerShape(22.dp))
+            .backgroundMaterial(true, Material.Regular).padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
-        Text("墙面永久空间便签", style = PicoTheme.typography.titleLarge)
-        Text("用左手柄射线指向已识别的墙面或桌面，按下扳机创建便签。")
         Text(message)
     }
 }
