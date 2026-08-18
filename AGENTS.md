@@ -16,7 +16,15 @@ add Material or Material3. Build with `./gradlew.bat assembleDebug`, then use
   `StickyNoteSerializationTest` covers the current JSON format and v1
   pipe-delimited todo compatibility, plus last-known spatial-position fallback.
 - Emulator `emulator-5554` launches the app without a crash-buffer entry.
-- `artifacts/drag-and-restore.png` is the latest capture. The emulator's
+  Transient editor and hint panels are children of one camera-target
+  `AnchorComponent` at `(0, 0, -0.9m)`; runtime evidence is
+  `WallStickiesPanel: camera anchor ready ... attachedPanels=2`.
+- Raw hand input now projects an HMD-to-index-tip ray onto detected wall/table
+  geometry, displays a green valid-hit marker, and opens creation on a pinching
+  edge. The emulator reports `HandTrackingProvider support=DEVICE_NOT_SUPPORTED`,
+  so hand-marker acceptance must use a physical hand-tracking headset; controller
+  creation remains the emulator fallback.
+- `artifacts/hand-input-marker-20260813.png` is the latest capture. The emulator's
   Stage compositor can black out attachment panels in 2D captures; use the
   runtime `WallStickiesAnchor: loaded anchors=1` log as restart evidence.
 - `HomeStage` starts `PlaneTrackingManager` for detected room surfaces; the

@@ -7,12 +7,29 @@
 ## 当前能力
 
 - 左手柄射线命中已识别墙面/桌面后创建便签，避免在空气中创建。
+- 支持读取双手关节姿态：使用“头显位置 → 食指尖”射线检测真实表面，有效命中时显示绿色标记，捏合后进入创建流程。
 - 便签支持标题、正文、待办清单、勾选状态、删除、纯色/磨砂样式和预设颜色。
 - 每张便签拥有独立 PICO Persistent Spatial Anchor UUID，并通过 Room 本地持久化保存内容与锚点关联。
 - 应用启动时加载当前应用全部空间锚点，按 UUID 与 Room 记录匹配恢复。
 - 订阅锚点 `LOADED` / `UPDATED` 事件，支持延迟定位与空间坐标更新。
-- 编辑器与短提示面板在头显前方显示；编辑或后台状态下禁用锚点选择，防止误触发新建。
+- 编辑器与短提示面板共同挂载到相机目标 `AnchorComponent`，固定在用户前方约 `0.9m`，无需逐帧手动同步头显姿态。
+- 编辑器打开或应用进入后台时禁用表面选择，防止点击编辑、删除或重新进入应用时误触发新建。
 - 提供 `WallStickiesRestore`、`WallStickiesAnchor`、`WallStickiesRender`、`WallStickiesInput` 日志用于恢复与交互排障。
+
+### 功能状态
+
+| 功能 | 状态 | 说明 |
+| --- | --- | --- |
+| 手柄射线创建 | 已实现 | 左手柄射线命中墙面或桌面后按扳机。 |
+| 捏合创建 | 已实现，需设备支持 | 原始手势追踪不可用时自动保留手柄操作路径。 |
+| 点击编辑、按钮删除 | 已实现 | 编辑器打开期间关闭创建检测。 |
+| 待办清单及勾选持久化 | 已实现 | 内容通过 Room 保存。 |
+| 相机锚定编辑器/提示窗 | 已实现 | 两个面板共享同一个相机锚点。 |
+| 拖拽后重新锚定 | 规划中 | 需要创建新锚点、更新 Room，再删除旧锚点并支持失败回滚。 |
+| 长按删除 | 规划中 | 计划采用长按进度反馈和短时撤销。 |
+| 凝视显示操作浮层 | 规划中 | 需要统一 Pointer 事件和设备眼动能力检测。 |
+
+> 当前测试用真实设备曾返回 `HandTrackingProvider support=DEVICE_NOT_SUPPORTED`。这表示该设备当前无法向应用提供原始手部姿态，可能与设备型号、系统版本或手势开关有关；此时请使用左手柄。眼动和手势功能必须在运行时检查 `supportState`，不能仅凭 SDK 中存在对应 API 判断可用。
 
 ## 技术方案
 
@@ -20,13 +37,44 @@
 DefaultStage（Mixed / Full Space）
 ├── SpatialView
 │   ├── 便签 AttachmentPanel（世界锚定）
-│   ├── 编辑器 AttachmentPanel（跟随头显）
-│   └── 提示 AttachmentPanel（跟随头显）
+│   ├── Camera Anchor（跟随头显）
+│   │   ├── 编辑器 AttachmentPanel
+│   │   └── 提示 AttachmentPanel
+│   └── 手势有效表面命中标记
+├── PlaneTrackingManager（墙面/桌面检测）
+├── Hand / Controller / HMD Tracking Provider
 ├── WorldTrackingManager（Persistent Spatial Anchor）
 └── Room（便签内容、样式、待办与 anchorUuid）
 ```
 
 > Persistent Spatial Anchor 需要在 Full Space Stage 中使用。虽然便签 UI 是平面 SpatialUI 面板，但不能仅依赖 Shared Space 的普通 WindowContainer 实现真实空间持久化。
+
+## 空间交互
+
+### 创建便签
+
+```text
+射线或手势指向真实表面
+→ PlaneTrackingManager 返回墙面/桌面候选平面
+→ 射线与平面三角形求交
+→ 有效命中显示反馈
+→ 扳机或捏合确认
+→ 编辑内容
+→ 创建 Persistent Spatial Anchor
+→ Room 保存内容、样式、最后位置和 anchorUuid
+```
+
+桌面和墙面只决定是否允许创建以及锚点位置。便签创建方向使用确认时的头显水平朝向，避免文字平铺在桌面上难以阅读。
+
+### 输入降级顺序
+
+```text
+真实眼动/手势可用 → 空间 Pointer 或捏合
+手势不可用        → 左手柄射线与扳机
+未命中有效表面    → 不创建，仅显示短提示
+```
+
+PICO 模拟器可使用鼠标验证系统 Eye Gesture Mode 和普通 SpatialUI 控件，但原始 `HandTrackingProvider` 可能返回不支持，因此不能用模拟器证明真实手势关节追踪可用。
 
 ## 开发环境安装（Windows）
 
@@ -131,6 +179,14 @@ Room 全部便签 → loadAnchor() 加载本应用全部锚点
 4. `WallStickiesRender` 中的 `display=ATTACHED`。
 
 PICO 模拟器可用于构建、启动和日志调试，但多锚点持久化、设备重启和位置漂移必须以真实头显验收为准。
+
+## 已知限制
+
+- 模拟器或部分真实设备可能无法提供原始手势追踪数据；应用应继续允许手柄操作。
+- Persistent Spatial Anchor 能否跨设备重启恢复取决于设备空间定位与锚点服务，必须逐台真实设备验收。
+- ADB 截图可能无法捕获 Spatial Stage 合成层；截图为空不等于空间面板没有显示。
+- 当前平面命中实现按需读取检测平面。后续拖拽功能应改为订阅平面更新并缓存三角形，避免拖动期间高频重建平面数据。
+- 60fps 和内存低于 100MB 尚需在 Release 包和真实设备上进行性能验证。
 
 ## 项目文档
 

@@ -3,6 +3,7 @@ package com.spatialapps.wallstickies.content
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -33,8 +34,14 @@ import androidx.compose.ui.unit.dp
 import android.util.Log
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.pico.spatial.core.ecs.AnchorComponent
+import com.pico.spatial.core.ecs.ModelComponent
 import com.pico.spatial.core.ecs.TransformComponent
 import com.pico.spatial.core.ecs.Entity
+import com.pico.spatial.core.ecs.anchor.AnchorTarget
+import com.pico.spatial.core.ecs.resource.MeshResource
+import com.pico.spatial.core.ecs.resource.UnlitMaterial
+import com.pico.spatial.core.math.Color4
 import com.pico.spatial.core.math.Vector3
 import com.pico.spatial.core.math.EulerAngles
 import com.pico.spatial.ui.design.Button
@@ -56,6 +63,8 @@ import com.pico.spatial.tracking.controller.ControllerTrackingData
 import com.pico.spatial.tracking.controller.ControllerTrackingProvider
 import com.pico.spatial.tracking.hmd.HMDPose
 import com.pico.spatial.tracking.hmd.HMDTrackingProvider
+import com.pico.spatial.tracking.hand.HandJoint.Index
+import com.pico.spatial.tracking.hand.HandTrackingProvider
 import com.spatialapps.wallstickies.data.local.StickyStore
 import com.spatialapps.wallstickies.data.repository.RoomStickyNoteRepository
 import com.spatialapps.wallstickies.data.repository.WorldAnchorRepository
@@ -76,6 +85,23 @@ fun HomeStage() {
     val notesRepository = remember { RoomStickyNoteRepository(StickyStore.database(context).stickyDao()) }
     val manager = remember { ManageStickyNotes(notesRepository, WorldAnchorRepository()) }
     val stageEntities = remember { mutableMapOf<String, Entity>() }
+    val transientPanelAnchor = remember {
+        Entity().apply { setName("WallStickiesTransientPanelAnchor") }
+    }
+    val gestureMarkerEntity = remember {
+        Entity().apply {
+            setName("WallStickiesGestureSurfaceMarker")
+            components.set(
+                ModelComponent(
+                    MeshResource.createSphere(GESTURE_MARKER_RADIUS_METRES),
+                    UnlitMaterial.create().apply {
+                        setBaseColor(Color4(0.15f, 0.95f, 0.55f, 1f))
+                    },
+                ),
+            )
+            enabled = false
+        }
+    }
     // Keep the renderer log useful: SpatialView updates frequently, so only emit a
     // line when a note changes from missing to attached (or vice versa).
     val renderedNoteStates = remember { mutableMapOf<String, String>() }
@@ -83,6 +109,7 @@ fun HomeStage() {
     val notes by notesRepository.observe().collectAsState(emptyList())
     val leftControllerProvider = remember { ControllerTrackingProvider() }
     val hmdTrackingProvider = remember { HMDTrackingProvider() }
+    val handTrackingProvider = remember { HandTrackingProvider() }
     val leftControllerData by leftControllerProvider.dataFlow.collectAsState(ControllerTrackingData(null, null, 0L))
     var leftTriggerSequence by remember { mutableIntStateOf(0) }
     var interactionMessage by remember { mutableStateOf("正在等待左手柄空间姿态…") }
@@ -91,12 +118,10 @@ fun HomeStage() {
     var restoredRotations by remember { mutableStateOf<Map<String, EulerAngles>>(emptyMap()) }
     var draftPosition by remember { mutableStateOf(Vector3(0f, 1.5f, -1.2f)) }
     var draftRotation by remember { mutableStateOf(EulerAngles(0f, 0f, 0f)) }
-    // The Stage origin is at the user's feet. Keep transient UI near eye height;
-    // only saved notes use the ray-hit world position.
-    val defaultEditorPosition = Vector3(0f, 1.45f, -1.2f)
-    var editorPosition by remember { mutableStateOf(defaultEditorPosition) }
-    var statusPosition by remember { mutableStateOf(Vector3(0f, 1.85f, -1.2f)) }
     var hmdPose by remember { mutableStateOf<HMDPose?>(null) }
+    var gestureSurfaceHit by remember { mutableStateOf<SurfaceHit?>(null) }
+    var handPinched by remember { mutableStateOf(false) }
+    var handTrackingState by remember { mutableStateOf("missing") }
     var editingNote by remember { mutableStateOf<StickyNote?>(null) }
     var editorVisible by remember { mutableStateOf(false) }
     var ignoreAnchorUntilTriggerRelease by remember { mutableStateOf(true) }
@@ -120,8 +145,8 @@ fun HomeStage() {
                     editorVisible = false
                     hintVisible = false
                     ignoreAnchorUntilTriggerRelease = true
-                    stageEntities["sticky"]?.enabled = false
-                    stageEntities["placement_hint"]?.enabled = false
+                    stageEntities[EDITOR_PANEL_ID]?.enabled = false
+                    stageEntities[HINT_PANEL_ID]?.enabled = false
                 }
                 Lifecycle.Event.ON_RESUME -> {
                     appActive = true
@@ -135,8 +160,14 @@ fun HomeStage() {
     }
     DisposableEffect(Unit) {
         onDispose {
-            stageEntities.values.forEach { entity -> runCatching { entity.destroy() } }
+            stageEntities
+                .filterKeys { it != EDITOR_PANEL_ID && it != HINT_PANEL_ID }
+                .values
+                .toSet()
+                .forEach { entity -> runCatching { entity.destroy() } }
             stageEntities.clear()
+            runCatching { transientPanelAnchor.destroy() }
+            runCatching { gestureMarkerEntity.destroy() }
         }
     }
     // A loaded anchor can arrive after the initial all-anchor call. Apply its
@@ -185,24 +216,68 @@ fun HomeStage() {
             hmdTrackingProvider.stop()
         }
     }
+    DisposableEffect(handTrackingProvider, appActive) {
+        if (appActive) {
+            val result = handTrackingProvider.start()
+            Log.i(
+                TAG,
+                "hand tracking started result=$result support=${handTrackingProvider.supportState}",
+            )
+        }
+        onDispose {
+            handTrackingProvider.stop()
+            gestureSurfaceHit = null
+        }
+    }
     LaunchedEffect(hmdTrackingProvider) {
         hmdTrackingProvider.dataFlow.collect { hmdPose = it.hmdPose }
     }
-    LaunchedEffect(hmdPose, editorVisible) {
-        hmdPose?.let { pose ->
-            val forward = pose.rotation.rotateVector(Vector3.BACK)
-            // Stage coordinates are meters. Temporary panels stay in front of the HMD;
-            // anchored notes keep their own world-space transforms.
-            editorPosition = Vector3(
-                pose.position.x + forward.x * 0.75f,
-                pose.position.y + forward.y * 0.75f,
-                pose.position.z + forward.z * 0.75f,
-            )
-            statusPosition = Vector3(
-                pose.position.x + forward.x * 0.75f,
-                pose.position.y + forward.y * 0.75f,
-                pose.position.z + forward.z * 0.75f,
-            )
+    // Sample raw hand data at a modest rate so the surface marker remains responsive
+    // without rebuilding plane geometry on every tracking frame. The ray runs from the
+    // current HMD position through the index fingertip; pinching confirms only a valid
+    // wall/table hit, so a gesture can never create a note in empty air.
+    LaunchedEffect(handTrackingProvider, appActive) {
+        while (appActive) {
+            val hand = handTrackingProvider.latestData.right ?: handTrackingProvider.latestData.left
+            if (hand == null) {
+                if (handTrackingState != "missing") {
+                    handTrackingState = "missing"
+                    Log.i(TAG, "hand tracking pose lost")
+                }
+                handPinched = false
+                gestureSurfaceHit = null
+                delay(GESTURE_SAMPLE_INTERVAL_MILLIS)
+                continue
+            }
+            if (handTrackingState != "ready") {
+                handTrackingState = "ready"
+                interactionMessage = "手势与左手柄已就绪：指向墙面或桌面，捏合或按扳机创建。"
+                Log.i(TAG, "hand tracking pose ready")
+            }
+            val indexTip = hand[Index.INDEX_TIP].position
+            val thumbTip = hand[Index.THUMB_TIP].position
+            val pinchedNow = nextPinchState(handPinched, distance(indexTip, thumbTip))
+            val cameraPose = hmdPose
+            val direction = cameraPose?.let { normalized(subtract(indexTip, it.position)) }
+            val hit = if (cameraPose != null && direction != null && !editorOpen) {
+                findSurfaceRayHit(cameraPose.position, direction)
+            } else null
+            gestureSurfaceHit = hit
+            if (pinchedNow && !handPinched && hit != null && !editorOpen) {
+                interactionMessage = "手势已命中${hit.semantic}，已打开便签编辑器。"
+                hintVisible = false
+                draftPosition = hit.position
+                draftRotation = cameraFacingRotation(
+                    cameraPose?.rotation?.rotateVector(Vector3.BACK) ?: direction ?: Vector3.BACK,
+                )
+                ignoreAnchorUntilTriggerRelease = true
+                editingNote = null
+                editorVisible = true
+                gestureSurfaceHit = null
+                Log.i(TAG, "hand pinch surface hit=${hit.position} type=${hit.semantic}")
+            }
+            handPinched = pinchedNow
+            delay(GESTURE_SAMPLE_INTERVAL_MILLIS)
         }
     }
     LaunchedEffect(notes) {
@@ -305,27 +380,20 @@ fun HomeStage() {
     }
     SpatialView(
         update = { content, attachments ->
-            attachments.entity("sticky")?.apply {
-                stageEntities["sticky"] = this
-                enabled = editorVisible
-                if (editorVisible) {
-                    components[TransformComponent::class.java]?.apply {
-                        setPosition(editorPosition)
-                        hmdPose?.let { setQuaternion(it.rotation) }
-                    }
-                    content.addEntity(this)
-                }
-            }
-            attachments.entity("placement_hint")?.apply {
-                stageEntities["placement_hint"] = this
-                enabled = hintVisible
-                if (hintVisible) {
-                    components[TransformComponent::class.java]?.apply {
-                        setPosition(statusPosition)
-                        hmdPose?.let { setQuaternion(it.rotation) }
-                    }
-                    content.addEntity(this)
-                }
+            attachments.entity(EDITOR_PANEL_ID)?.enabled = editorVisible
+            attachments.entity(HINT_PANEL_ID)?.enabled = hintVisible
+            gestureMarkerEntity.enabled = appActive && !editorVisible && gestureSurfaceHit != null
+            gestureSurfaceHit?.let { hit ->
+                val cameraPosition = hmdPose?.position
+                val markerPosition = cameraPosition?.let {
+                    val towardCamera = normalized(subtract(it, hit.position))
+                    Vector3(
+                        hit.position.x + towardCamera.x * GESTURE_MARKER_SURFACE_OFFSET_METRES,
+                        hit.position.y + towardCamera.y * GESTURE_MARKER_SURFACE_OFFSET_METRES,
+                        hit.position.z + towardCamera.z * GESTURE_MARKER_SURFACE_OFFSET_METRES,
+                    )
+                } ?: hit.position
+                gestureMarkerEntity.components[TransformComponent::class.java]?.setPosition(markerPosition)
             }
             notes.forEach { note ->
                 val anchorPosition = restoredPositions[note.id]
@@ -350,26 +418,35 @@ fun HomeStage() {
             }
         },
         initial = { content, attachments ->
-            attachments.entity(id = "sticky")?.apply {
-                components[TransformComponent::class.java]?.apply {
-                    setPosition(editorPosition)
-                    hmdPose?.let { setQuaternion(it.rotation) }
+            transientPanelAnchor.components.set(
+                AnchorComponent(AnchorTarget.createCameraTarget()).apply {
+                    positionOffset = Vector3(0f, 0f, -0.9f)
+                },
+            )
+            content.addEntity(transientPanelAnchor)
+            content.addEntity(gestureMarkerEntity)
+            var attachedPanelCount = 0
+            listOf(
+                EDITOR_PANEL_ID to editorVisible,
+                HINT_PANEL_ID to hintVisible,
+            ).forEach { (id, visible) ->
+                attachments.entity(id)?.apply {
+                    components[TransformComponent::class.java]?.setPosition(Vector3.ZERO)
+                    enabled = visible
+                    transientPanelAnchor.addChild(this)
+                    stageEntities[id] = this
+                    attachedPanelCount++
                 }
-                content.addEntity(this)
             }
-            attachments.entity(id = "placement_hint")?.apply {
-                components[TransformComponent::class.java]?.apply {
-                    setPosition(statusPosition)
-                    hmdPose?.let { setQuaternion(it.rotation) }
-                }
-                content.addEntity(this)
-            }
+            Log.i(
+                PANEL_TAG,
+                "camera anchor ready offset=(0.0,0.0,-0.9) attachedPanels=$attachedPanelCount",
+            )
         },
         attachments = {
-            if (hintVisible) {
-            AttachmentPanel(id = "placement_hint") {
+            AttachmentPanel(id = HINT_PANEL_ID) {
                 if (hintVisible) PlacementHint(interactionMessage)
-            }
+                else Spacer(Modifier.size(1.dp))
             }
             notes.forEach { note ->
                 AttachmentPanel(id = note.id) {
@@ -388,7 +465,7 @@ fun HomeStage() {
                     )
                 }
             }
-            AttachmentPanel(id = "sticky") {
+            AttachmentPanel(id = EDITOR_PANEL_ID) {
                 if (editorVisible) {
                     StickyEditor(
                         editing = editingNote,
@@ -405,7 +482,7 @@ fun HomeStage() {
                             editorVisible = false
                         },
                     )
-                }
+                } else Spacer(Modifier.size(1.dp))
             }
         },
     )
@@ -597,6 +674,20 @@ private fun cameraFacingRotation(viewDirection: Vector3): EulerAngles =
 
 private fun subtract(left: Vector3, right: Vector3) = Vector3(left.x - right.x, left.y - right.y, left.z - right.z)
 
+private fun normalized(vector: Vector3): Vector3 {
+    val length = kotlin.math.sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
+    return if (length < 0.00001f) Vector3.BACK
+    else Vector3(vector.x / length, vector.y / length, vector.z / length)
+}
+
+private fun distance(left: Vector3, right: Vector3): Float {
+    val delta = subtract(left, right)
+    return kotlin.math.sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z)
+}
+
+internal fun nextPinchState(wasPinched: Boolean, fingertipDistanceMetres: Float): Boolean =
+    fingertipDistanceMetres < if (wasPinched) PINCH_RELEASE_METRES else PINCH_START_METRES
+
 private fun cross(left: Vector3, right: Vector3) = Vector3(
     left.y * right.z - left.z * right.y,
     left.z * right.x - left.x * right.z,
@@ -620,9 +711,17 @@ private fun rayTriangleDistance(origin: Vector3, direction: Vector3, a: Vector3,
     return dot(edge2, q) * inverse
 }
 
+private const val EDITOR_PANEL_ID = "sticky"
+private const val HINT_PANEL_ID = "placement_hint"
 private const val TAG = "WallStickiesInput"
+private const val PANEL_TAG = "WallStickiesPanel"
 private const val RESTORE_TAG = "WallStickiesRestore"
 private const val RENDER_TAG = "WallStickiesRender"
+private const val GESTURE_SAMPLE_INTERVAL_MILLIS = 80L
+private const val GESTURE_MARKER_RADIUS_METRES = 0.012f
+private const val GESTURE_MARKER_SURFACE_OFFSET_METRES = 0.008f
+private const val PINCH_START_METRES = 0.022f
+private const val PINCH_RELEASE_METRES = 0.035f
 
 private fun logRenderState(states: MutableMap<String, String>, noteId: String, state: String) {
     if (states.put(noteId, state) != state) {
